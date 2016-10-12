@@ -34,6 +34,9 @@
 - (void)createEventInteractively:(CDVInvokedUrlCommand*)command;
 - (void)modifyEventWithOptions:(CDVInvokedUrlCommand*)command;
 
+- (void)getAllReminders:(CDVInvokedUrlCommand*)command;
+- (void)deleteReminderItem:(CDVInvokedUrlCommand*)command;
+
 - (void)findEventWithOptions:(CDVInvokedUrlCommand*)command;
 - (void)findAllEventsInNamedCalendar:(CDVInvokedUrlCommand*)command;
 
