@@ -295,6 +295,66 @@
   }];
 }
 
+- (void) getAllReminders:(CDVInvokedUrlCommand*)command {
+    [self.commandDelegate runInBackground: ^{
+        
+        NSLog(@"Attempting to retrieve all reminders");
+        
+        [self.eventStore requestAccessToEntityType:EKEntityTypeReminder completion:^(BOOL granted, NSError *error) {
+            NSLog(@"acces to §Reminder granded %i ",granted);
+        }];
+        NSPredicate *predicate = [self.eventStore predicateForRemindersInCalendars:nil];
+        
+        [self.eventStore fetchRemindersMatchingPredicate:predicate completion:^(NSArray *reminders) {
+            
+            NSMutableArray *finalResults = [[NSMutableArray alloc] initWithCapacity:reminders.count];
+            
+            for (EKReminder *reminder in reminders) {
+                NSLog(@"reminder %@",reminder);
+
+//              skip completed items.
+                if(reminder.completionDate != nil && reminder.completionDate.timeIntervalSince1970 > 1000) {
+                    NSLog(@"this reminder has been completed (%d)", reminder.completionDate.timeIntervalSince1970);
+                    continue;
+                }
+                
+                NSMutableDictionary *entry = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+                                              reminder.calendarItemIdentifier, @"id",
+                                              reminder.title, @"title",
+                                              reminder.calendar.title, @"calendarName",
+                                              [NSString stringWithFormat:@"%lu", (unsigned long)reminder.priority], @"priority",
+                                              [NSString stringWithFormat:@"%.0f", reminder.dueDateComponents.date.timeIntervalSince1970], @"duedate",
+                                              nil];
+                [finalResults addObject:entry];
+            }
+            
+            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsArray:finalResults];
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        }];
+        
+    }];
+}
+
+- (void) deleteReminderItem:(CDVInvokedUrlCommand*)command {
+    
+    NSDictionary* options = [command.arguments objectAtIndex:0];
+    NSString* reminderIdentifier = [options objectForKey:@"reminderId"];
+    
+    NSLog(@"Attempting to delete reminder using identifer %@", reminderIdentifier);
+    
+    EKCalendarItem* reminderItem = [self.eventStore calendarItemWithIdentifier:reminderIdentifier];
+    
+    [self.eventStore removeReminder:reminderItem commit:YES error:nil];
+    NSLog(@"Delete completed");
+    
+    NSString *msg = @"Reminder deleted";
+    
+    CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:msg];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    
+}
+
+
 - (NSArray*) findEKEventsWithTitle: (NSString *)title
                         location: (NSString *)location
                            notes: (NSString *)notes
