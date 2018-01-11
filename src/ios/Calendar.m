@@ -153,7 +153,7 @@
 
       // Find matches
       if (calEventID != nil) {
-          theEvent = [self.eventStore calendarItemWithIdentifier:calEventID];
+          theEvent = (EKEvent *)[self.eventStore calendarItemWithIdentifier:calEventID];
       }
 
     if (theEvent == nil) {
@@ -295,66 +295,6 @@
   }];
 }
 
-- (void) getAllReminders:(CDVInvokedUrlCommand*)command {
-    [self.commandDelegate runInBackground: ^{
-        
-        NSLog(@"Attempting to retrieve all reminders");
-        
-        [self.eventStore requestAccessToEntityType:EKEntityTypeReminder completion:^(BOOL granted, NSError *error) {
-            NSLog(@"acces to §Reminder granded %i ",granted);
-        }];
-        NSPredicate *predicate = [self.eventStore predicateForRemindersInCalendars:nil];
-        
-        [self.eventStore fetchRemindersMatchingPredicate:predicate completion:^(NSArray *reminders) {
-            
-            NSMutableArray *finalResults = [[NSMutableArray alloc] initWithCapacity:reminders.count];
-            
-            for (EKReminder *reminder in reminders) {
-                NSLog(@"reminder %@",reminder);
-
-//              skip completed items.
-                if(reminder.completionDate != nil && reminder.completionDate.timeIntervalSince1970 > 1000) {
-                    NSLog(@"this reminder has been completed (%d)", reminder.completionDate.timeIntervalSince1970);
-                    continue;
-                }
-                
-                NSMutableDictionary *entry = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
-                                              reminder.calendarItemIdentifier, @"id",
-                                              reminder.title, @"title",
-                                              reminder.calendar.title, @"calendarName",
-                                              [NSString stringWithFormat:@"%lu", (unsigned long)reminder.priority], @"priority",
-                                              [NSString stringWithFormat:@"%.0f", reminder.dueDateComponents.date.timeIntervalSince1970], @"duedate",
-                                              nil];
-                [finalResults addObject:entry];
-            }
-            
-            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsArray:finalResults];
-            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-        }];
-        
-    }];
-}
-
-- (void) deleteReminderItem:(CDVInvokedUrlCommand*)command {
-    
-    NSDictionary* options = [command.arguments objectAtIndex:0];
-    NSString* reminderIdentifier = [options objectForKey:@"reminderId"];
-    
-    NSLog(@"Attempting to delete reminder using identifer %@", reminderIdentifier);
-    
-    EKCalendarItem* reminderItem = [self.eventStore calendarItemWithIdentifier:reminderIdentifier];
-    
-    [self.eventStore removeReminder:reminderItem commit:YES error:nil];
-    NSLog(@"Delete completed");
-    
-    NSString *msg = @"Reminder deleted";
-    
-    CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:msg];
-    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-    
-}
-
-
 - (NSArray*) findEKEventsWithTitle: (NSString *)title
                         location: (NSString *)location
                            notes: (NSString *)notes
@@ -398,10 +338,16 @@
 }
 
 - (EKCalendar*) findEKCalendar: (NSString *)calendarName {
-  for (EKCalendar *thisCalendar in [self.eventStore calendarsForEntityType:EKEntityTypeEvent]){
-    NSLog(@"Calendar: %@", thisCalendar.title);
-    if ([thisCalendar.title isEqualToString:calendarName]) {
-      return thisCalendar;
+  NSArray<EKCalendar *> *calendars = [self.eventStore calendarsForEntityType:EKEntityTypeEvent];
+  if (calendars != nil && calendars.count > 0) {
+    for (EKCalendar *thisCalendar in calendars) {
+      NSLog(@"Calendar: %@", thisCalendar.title);
+      if ([thisCalendar.title isEqualToString:calendarName]) {
+        return thisCalendar;
+      }
+      if ([thisCalendar.calendarIdentifier isEqualToString:calendarName]) {
+        return thisCalendar;
+      }
     }
   }
   NSLog(@"No match found for calendar with name: %@", calendarName);
@@ -423,6 +369,37 @@
     }
   }
   return nil;
+}
+
+- (NSMutableArray*) remindersToDataArray: (NSArray*)matchingReminders {
+    NSMutableArray *results = [[NSMutableArray alloc] initWithCapacity:matchingReminders.count];
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    
+    [df setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+    
+    for( EKReminder * reminder in matchingReminders) {
+        
+        NSLog(@"Normalizing reminder: %@", reminder);
+        
+//        NSDate * dueDate = [calendar dateFromComponents:reminder.dueDateComponents];
+        
+        NSString *dueDateString = [NSString stringWithFormat:@"%u-%u-%u %u:%u:%u", reminder.dueDateComponents.year, reminder.dueDateComponents.month, reminder.dueDateComponents.day, reminder.dueDateComponents.hour, reminder.dueDateComponents.minute, reminder.dueDateComponents.second];
+        
+        NSMutableDictionary *entry = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+                                      reminder.title, @"title",
+                                      reminder.calendarItemIdentifier, @"id",
+                                      reminder.completed ? @"1" : @"0", @"completed",
+                                      dueDateString, @"dueDate",
+                                      [df stringFromDate:reminder.completionDate], @"completionDate",
+                                      nil];
+        
+        [entry setObject:reminder.calendarItemIdentifier forKey:@"id"];
+        [results addObject:entry];
+    }
+    
+    return results;
+    
+    
 }
 
 - (NSMutableArray*) eventsToDataArray: (NSArray*)matchingEvents {
@@ -468,7 +445,50 @@
     }
 
     if (event.recurrenceRules != nil) {
-      [entry setObject:event.recurrenceRules forKey:@"rrule"];
+      for (EKRecurrenceRule *rule in event.recurrenceRules) {
+        NSMutableDictionary *rrule = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+            rule.calendarIdentifier, @"calendar", nil];
+
+        switch (rule.frequency) {
+          case EKRecurrenceFrequencyDaily:
+              [rrule setObject:@"daily" forKey:@"freq"];
+          break;
+
+          case EKRecurrenceFrequencyWeekly:
+              [rrule setObject:@"weekly" forKey:@"freq"];
+          break;
+
+          case EKRecurrenceFrequencyMonthly:
+              [rrule setObject:@"monthly" forKey:@"freq"];
+          break;
+
+          case EKRecurrenceFrequencyYearly:
+              [rrule setObject:@"yearly" forKey:@"freq"];
+          break;
+
+          default:
+              [rrule setObject:@"none" forKey:@"freq"];
+          break;
+        }
+
+        NSNumber *interval = [NSNumber numberWithInteger: rule.interval];
+        [rrule setObject:interval forKey:@"interval"];
+
+      if (rule.recurrenceEnd != nil) {
+        NSMutableDictionary *until = [[NSMutableDictionary alloc] init];
+
+        if (rule.recurrenceEnd.endDate != nil) {
+          [until setObject:[df stringFromDate:rule.recurrenceEnd.endDate] forKey:@"date"];
+        }
+
+      NSNumber *count = [NSNumber numberWithInteger: rule.recurrenceEnd.occurrenceCount];
+      [until setObject:count forKey:@"count"];
+
+        [rrule setObject:until forKey:@"until"];
+      }
+
+        [entry setObject:rrule forKey:@"rrule"];
+      }
     }
 
     [entry setObject:event.calendarItemIdentifier forKey:@"id"];
@@ -512,7 +532,115 @@
   }];
 }
 
+- (void) getAllReminders:(CDVInvokedUrlCommand*)command {
+    
+    __block CDVPluginResult *pluginResult = nil;
+    [self.commandDelegate runInBackground: ^{
+        NSLog(@"getAllReminders invoked");
+        
+        //request permission first
+        [eventStore requestAccessToEntityType:EKEntityTypeReminder completion:^(BOOL granted, NSError * _Nullable error) {
+            if(granted) {
+//                permission granted.
+                NSLog(@"Permission granted");
+                NSPredicate *predicate = [eventStore predicateForRemindersInCalendars:nil];
+                
+                [eventStore fetchRemindersMatchingPredicate:predicate completion:^(NSArray *reminders) {
+                    NSLog(@"reminders obtained: %d", reminders.count);
+                    
+                    NSMutableArray * remindersDataArray = [self remindersToDataArray:reminders];
+                    
+                    //            pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsArray:remindersDataArray];
+                    pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsArray:remindersDataArray];
+                    
+                    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+                }];
+            }
+            else {
+//                not granted.
+                
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Reminder permission not granted."];
+            }
+        }];
+        
+        
+        
+//        NSArray *calendarArray = nil;
+        
+        NSPredicate *predicate = [eventStore predicateForRemindersInCalendars:nil];
+        
+        [eventStore fetchRemindersMatchingPredicate:predicate completion:^(NSArray *reminders) {
+            NSLog(@"reminders obtained: %@", reminders);
+            
+            NSMutableArray * remindersDataArray = [self eventsToDataArray:reminders];
+            
+//            pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsArray:remindersDataArray];
+            pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsArray:remindersDataArray];
+            
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        }];
+        
+    }];
+}
+
+- (void) deleteReminderById:(CDVInvokedUrlCommand*)command {
+    NSDictionary* options = [command.arguments objectAtIndex:0];
+    NSString* reminderId = [options objectForKey:@"reminderId"];
+    
+    NSLog(@"Ready to delete reminder by id: %@", reminderId);
+    
+//    NSArray *calendarArray = [NSArray arrayWithObject:[eventStore defaultCalendarForNewReminders]];
+    NSPredicate *predicate = [eventStore predicateForRemindersInCalendars:nil];
+    
+    [eventStore fetchRemindersMatchingPredicate:predicate completion:^(NSArray *reminders) {
+        for(EKReminder *reminder in reminders) {
+            NSLog(@"Looking at reminder: %@", reminder.calendarItemIdentifier);
+            if([reminderId isEqualToString:reminder.calendarItemIdentifier]) {
+                NSLog(@"Deleting reminder: %@", reminder.title);
+                [eventStore removeReminder:reminder commit:YES error:nil];
+                
+                NSString *msg = [@"Deleted reminder " stringByAppendingString:reminder.title];
+                CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:msg];
+                [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+                return;
+                
+            }
+        }
+        
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Could not find reminder"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        
+    }];
+    
+}
+
 - (void) listEventsInRange:(CDVInvokedUrlCommand*)command {
+  NSDictionary* options = [command.arguments objectAtIndex:0];
+  NSNumber* startTime  = [options objectForKey:@"startTime"];
+  NSNumber* endTime    = [options objectForKey:@"endTime"];
+
+  [self.commandDelegate runInBackground: ^{
+      NSLog(@"listEventsInRange invoked");
+      NSTimeInterval _startInterval = [startTime doubleValue] / 1000; // strip millis
+      NSDate *startDate = [NSDate dateWithTimeIntervalSince1970:_startInterval];
+
+      NSTimeInterval _endInterval = [endTime doubleValue] / 1000; // strip millis
+      NSDate *endDate = [NSDate dateWithTimeIntervalSince1970:_endInterval];
+
+      NSLog(@"startDate: %@", startDate);
+      NSLog(@"endDate: %@", endDate);
+
+      CDVPluginResult *pluginResult = nil;
+
+      NSArray *calendarArray = nil;
+      NSPredicate *fetchCalendarEvents = [eventStore predicateForEventsWithStartDate:startDate endDate:endDate calendars:calendarArray];
+      NSArray *matchingEvents = [eventStore eventsMatchingPredicate:fetchCalendarEvents];
+      NSMutableArray * eventsDataArray = [self eventsToDataArray:matchingEvents];
+
+      pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsArray:eventsDataArray];
+
+      [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+  }];  
 }
 
 - (void)createEventWithOptions:(CDVInvokedUrlCommand*)command {
@@ -832,7 +960,7 @@
     }
 
     // Find matches
-    EKCalendarItem *theEvent;
+    EKCalendarItem *theEvent = nil;
     if (calEventID != nil) {
       theEvent = [self.eventStore calendarItemWithIdentifier:calEventID];
     }
