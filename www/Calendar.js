@@ -33,6 +33,14 @@ Calendar.prototype.requestReadWritePermission = function (callback) {
   cordova.exec(callback, null, "Calendar", "requestReadWritePermission", []);
 };
 
+Calendar.prototype.getAllReminders = function(successFn, errorFn) {
+	cordova.exec(successFn, errorFn, "Calendar", "getAllReminders", []);
+};
+
+Ccalendar.prototype.deleteReminderById = function(reminderIdentifier, successFn, errorFn) {
+  cordova.exec(successFn, errorFn, "Calendar", "deleteReminderById", [{"reminderId": reminderIdentifier ? reminderIdentifier : null}]);
+};
+
 Calendar.prototype.createCalendar = function (calendarNameOrOptionsObject, successCallback, errorCallback) {
   var options;
   if (typeof calendarNameOrOptionsObject == "string") {
